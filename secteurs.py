@@ -1,0 +1,51 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+Created on Thu Mar 12 16:07:51 2026
+
+@author: joshuasoliotopoulos
+"""
+
+secteurs = ["Basic Materials", "Consumer Cyclical", "Financial Services", "Real Estate", "Consumer Defensive",
+            "Healthcare", "Utilities", "Communication Services", "Energy", "Industrials", "Technology"]
+
+
+industries = ["Agricultural Inputs", "Building Materials", "Chemicals", "Specialty Chemicals",
+                     "Lumber & Wood Production", "Paper & Paper Products", "Aluminum", "Copper",
+                     "Other Industrial Metals & Mining", "Gold", "Silver", "Other Precious Metals & Mining",
+                     "Coking Coal", "Steel", "Auto & Truck Dealerships", "Auto Manufacturers", "Auto Parts",
+                     "Recreational Vehicles", "Furnishings, Fixtures & Appliances", "Residential Construction",
+                     "Textile Manufacturing", "Apparel Manufacturing", "Footwear & Accessories", "Packaging & Containers",
+                     "Personal Services", "Restaurants", "Apparel Retail", "Department Stores", "Home Improvement Retail",
+                     "Luxury Goods", "Internet Retail", "Specialty Retail", "Gambling", "Leisure", "Lodging",
+                     "Resorts & Casinos", "Travel Services", "Asset Management", "Banks — Diversified", 
+                     "Banks — Regional", "Mortgage Finance", "Capital Markets", "Financial Data & Stock Exchanges",
+                     "Insurance — Life", "Insurance — Property & Casualty", "Insurance — Reinsurance",
+                     "Insurance — Specialty", "Insurance Brokers", "Insurance — Diversified", "Shell Companies",
+                     "Financial Conglomerates", "Credit Services", "Real Estate — Development", "Real Estate Services",
+                     "Real Estate — Diversified", "REIT — Healthcare Facilities", "REIT — Hotel & Motel",
+                     "REIT — Industrial", "REIT — Office", "REIT — Residential", "REIT — Retail", "REIT — Mortgage",
+                     "REIT — Specialty", "REIT — Diversified", "Beverages — Brewers", "Beverages — Wineries & Distilleries",
+                     "Beverages — Non-Alcoholic", "Confectioners", "Farm Products", "Household & Personal Products",
+                     "Packaged Foods", "Education & Training Services", "Discount Stores", "Food Distribution",
+                     "Grocery Stores", "Tobacco", "Biotechnology", "Drug Manufacturers — General",
+                     "Drug Manufacturers — Specialty & Generic", "Healthcare Plans", "Medical Care Facilities",
+                     "Pharmaceutical Retailers", "Health Information Services", "Medical Devices", "Medical Instruments & Supplies",
+                     "Diagnostics & Research", "Medical Distribution", "Utilities — Independent Power Producers",
+                     "Utilities — Renewable", "Utilities — Regulated Water", "Utilities — Regulated Electric",
+                     "Utilities — Regulated Gas", "Utilities — Diversified", "Telecom Services", "Advertising Agencies",
+                     "Publishing", "Broadcasting", "Entertainment", "Internet Content & Information", "Electronic Gaming & Multimedia",
+                     "Oil & Gas Drilling", "Oil & Gas E&P", "Oil & Gas Integrated", "Oil & Gas Midstream",
+                     "Oil & Gas Refining & Marketing", "Oil & Gas Equipment & Services", "Thermal Coal",
+                     "Uranium", "Aerospace & Defense", "Specialty Business Services", "Consulting Services",
+                     "Rental & Leasing Services", "Security & Protection Services", "Staffing & Employment Services",
+                     "Conglomerates", "Engineering & Construction", "Infrastructure Operations",
+                     "Building Products & Equipment", "Farm & Heavy Construction Machinery", "Industrial Distribution",
+                     "Business Equipment & Supplies", "Specialty Industrial Machinery", "Metal Fabrication",
+                     "Pollution & Treatment Controls", "FILTERLABEL_TOOLS_ACCESSORIES", "Electrical Equipment & Parts",
+                     "Airports & Air Services", "Airlines", "Railroads", "Marine Shipping", "Trucking",
+                     "Integrated Freight & Logistics", "Waste Management", "Information Technology Services",
+                     "Software — Application", "Software — Infrastructure", "Communication Equipment",
+                     "Computer Hardware", "Consumer Electronics", "Electronic Components", "Electronics & Computer Distribution",
+                     "Scientific & Technical Instruments", "Semiconductor Equipment & Materials", "Semiconductors",
+                     "Solar"]
