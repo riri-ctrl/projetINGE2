@@ -1,0 +1,251 @@
+#Creates 40 csv files including volatility google trends, index for CAC40, open close, volume etc.
+
+#Improvements:
+#              1) commas seperating columns on excel
+#              2) select only one of high low close or open so we can look long term
+#              3) maybe look at another etf, for example s&p500, 20next, etc.
+
+#Timeline: 1 week
+  
+pip install yfinance pandas pytrends ta
+
+
+import os
+import time
+import warnings
+import pandas as pd
+import yfinance as yf
+from pytrends.request import TrendReq
+import ta  # Technical Analysis library
+
+warnings.filterwarnings("ignore")
+
+# ─── CONFIG ──────────────────────────────────────────────────────────────────
+
+OUTPUT_DIR = "cac40_data"
+os.makedirs(OUTPUT_DIR, exist_ok=True)
+
+# Earliest possible start date (yfinance goes back ~20-25 years for most tickers)
+START_DATE = "2000-01-01"
+
+# pytrends: sleep between requests to avoid rate limiting (seconds)
+TRENDS_SLEEP = 10
+
+# ─── CAC40 TICKERS ───────────────────────────────────────────────────────────
+# Yahoo Finance tickers for CAC40 constituents (as of early 2025)
+
+CAC40_TICKERS = {
+    "Air Liquide":          "AI.PA",
+    "Airbus":               "AIR.PA",
+    "ArcelorMittal":        "MT.AS",
+    "AXA":                  "CS.PA",
+    "BNP Paribas":          "BNP.PA",
+    "Bouygues":             "EN.PA",
+    "Capgemini":            "CAP.PA",
+    "Carrefour":            "CA.PA",
+    "Compagnie de Saint-Gobain": "SGO.PA",
+    "Crédit Agricole":      "ACA.PA",
+    "Danone":               "BN.PA",
+    "Dassault Systèmes":    "DSY.PA",
+    "Engie":                "ENGI.PA",
+    "EssilorLuxottica":     "EL.PA",
+    "Eurofins Scientific":  "ERF.PA",
+    "Hermès":               "RMS.PA",
+    "Kering":               "KER.PA",
+    "Legrand":              "LR.PA",
+    "L'Oréal":              "OR.PA",
+    "LVMH":                 "MC.PA",
+    "Michelin":             "ML.PA",
+    "Orange":               "ORA.PA",
+    "Pernod Ricard":        "RI.PA",
+    "Publication":          "PUB.PA",
+    "Renault":              "RNO.PA",
+    "Safran":               "SAF.PA",
+    "Sanofi":               "SAN.PA",
+    "Schneider Electric":   "SU.PA",
+    "Société Générale":     "GLE.PA",
+    "Stellantis":           "STLAM.MI",
+    "STMicroelectronics":   "STMPA.PA",
+    "Teleperformance":      "TEP.PA",
+    "Thales":               "HO.PA",
+    "TotalEnergies":        "TTE.PA",
+    "Unibail-Rodamco-Westfield": "URW.PA",
+    "Veolia":               "VIE.PA",
+    "Vinci":                "DG.PA",
+    "Vivendi":              "VIV.PA",
+    "Worldline":            "WLN.PA",
+    "Alstom":               "ALO.PA",
+}
+
+CAC40_INDEX   = "^FCHI"   # CAC40 index ticker
+VIX_TICKER    = "^VIX"    # CBOE Volatility Index
+
+
+# ─── HELPERS ─────────────────────────────────────────────────────────────────
+
+def compute_indicators(df: pd.DataFrame) -> pd.DataFrame:
+    """Add all technical indicators to an OHLCV dataframe."""
+    close = df["Close"]
+    high  = df["High"]
+    low   = df["Low"]
+    vol   = df["Volume"]
+
+    # Moving averages
+    df["MA20"] = close.rolling(window=20).mean()
+    df["MA50"] = close.rolling(window=50).mean()
+
+    # Momentum (Rate of Change, 10-day by default)
+    df["Momentum"] = close.diff(10)
+
+    # RSI (14-period)
+    df["RSI"] = ta.momentum.RSIIndicator(close, window=14).rsi()
+
+    # MACD (12, 26, 9)
+    macd_obj      = ta.trend.MACD(close, window_slow=26, window_fast=12, window_sign=9)
+    df["MACD"]         = macd_obj.macd()
+    df["MACD_Signal"]  = macd_obj.macd_signal()
+    df["MACD_Hist"]    = macd_obj.macd_diff()
+
+    # Volatility: 20-day rolling std of daily returns (annualised)
+    daily_returns     = close.pct_change()
+    df["Volatility_20d"] = daily_returns.rolling(window=20).std() * (252 ** 0.5)
+
+    # Bollinger Bands (bonus – useful for ML)
+    bb = ta.volatility.BollingerBands(close, window=20, window_dev=2)
+    df["BB_Upper"] = bb.bollinger_hband()
+    df["BB_Lower"] = bb.bollinger_lband()
+    df["BB_Mid"]   = bb.bollinger_mavg()
+
+    return df
+
+
+def fetch_google_trends(keyword: str, start_year: int = 2004) -> pd.Series:
+    """
+    Fetch weekly Google Trends interest for a keyword.
+    Returns a Series indexed by date (resampled to daily, forward-filled).
+    pytrends max history ~2004-present.
+    """
+    try:
+        pytrends = TrendReq(hl="fr-FR", tz=60)
+
+        # pytrends can only pull ~5 years at a time reliably; loop in chunks
+        all_chunks = []
+        current_year = pd.Timestamp.today().year
+
+        for chunk_start in range(start_year, current_year + 1, 5):
+            chunk_end = min(chunk_start + 4, current_year)
+            timeframe = f"{chunk_start}-01-01 {chunk_end}-12-31"
+
+            pytrends.build_payload(
+                [keyword],
+                cat=0,
+                timeframe=timeframe,
+                geo="FR",
+                gprop=""
+            )
+            data = pytrends.interest_over_time()
+            if not data.empty and keyword in data.columns:
+                all_chunks.append(data[[keyword]])
+
+            time.sleep(TRENDS_SLEEP)
+
+        if not all_chunks:
+            return pd.Series(dtype=float, name="Google_Trends")
+
+        trends = pd.concat(all_chunks)
+        trends = trends[~trends.index.duplicated(keep="last")]
+        trends.index = pd.to_datetime(trends.index)
+
+        # Resample to daily and forward-fill (data is weekly)
+        trends_daily = trends[keyword].resample("D").interpolate(method="linear")
+        trends_daily.name = "Google_Trends"
+        return trends_daily
+
+    except Exception as e:
+        print(f"    [!] Google Trends failed for '{keyword}': {e}")
+        return pd.Series(dtype=float, name="Google_Trends")
+
+
+# ─── MAIN ────────────────────────────────────────────────────────────────────
+
+def main():
+    print("=" * 60)
+    print("  CAC40 Data Fetcher — starting")
+    print("=" * 60)
+
+    def flatten_columns(df):
+        """Flatten MultiIndex columns returned by newer yfinance versions."""
+        if isinstance(df.columns, pd.MultiIndex):
+            df.columns = df.columns.get_level_values(0)
+        return df
+
+    # 1. Download CAC40 index data once
+    print(f"\n[1/3] Downloading CAC40 index ({CAC40_INDEX}) …")
+    cac_raw = yf.download(CAC40_INDEX, start=START_DATE, auto_adjust=True, progress=False)
+    cac_raw = flatten_columns(cac_raw)
+    cac_raw.columns = [f"CAC40_{c}" for c in cac_raw.columns]
+    cac_raw.index = pd.to_datetime(cac_raw.index)
+    print(f"      {len(cac_raw)} trading days fetched.")
+
+    # 2. Download VIX data once
+    print(f"\n[2/3] Downloading VIX ({VIX_TICKER}) …")
+    vix_raw = yf.download(VIX_TICKER, start=START_DATE, auto_adjust=True, progress=False)
+    vix_raw = flatten_columns(vix_raw)
+    vix_close = vix_raw["Close"].copy()
+    vix_close.name = "VIX_Close"
+    vix_close.index = pd.to_datetime(vix_close.index)
+    print(f"      {len(vix_close)} trading days fetched.")
+
+    # 3. Loop over each company
+    print(f"\n[3/3] Processing {len(CAC40_TICKERS)} companies …\n")
+
+    for i, (company_name, ticker) in enumerate(CAC40_TICKERS.items(), 1):
+        print(f"  [{i:02d}/{len(CAC40_TICKERS)}] {company_name} ({ticker})")
+
+        # ── a) Download OHLCV ──────────────────────────────────────────────
+        try:
+            raw = yf.download(ticker, start=START_DATE, auto_adjust=True, progress=False)
+            if raw.empty:
+                print(f"       [!] No data returned, skipping.")
+                continue
+            raw.index = pd.to_datetime(raw.index)
+            # Flatten MultiIndex columns if present
+            if isinstance(raw.columns, pd.MultiIndex):
+                raw.columns = raw.columns.get_level_values(0)
+        except Exception as e:
+            print(f"       [!] Download failed: {e}")
+            continue
+
+        # ── b) Technical indicators ────────────────────────────────────────
+        df = compute_indicators(raw.copy())
+
+        # ── c) Merge CAC40 index columns ───────────────────────────────────
+        df = df.join(cac_raw, how="left")
+
+        # ── d) Merge VIX ──────────────────────────────────────────────────
+        df = df.join(vix_close, how="left")
+
+        # ── e) Google Trends ──────────────────────────────────────────────
+        print(f"         → Fetching Google Trends for '{company_name}' …")
+        trends = fetch_google_trends(company_name)
+        if not trends.empty:
+            df = df.join(trends, how="left")
+        else:
+            df["Google_Trends"] = float("nan")
+
+        # ── f) Clean up & save ────────────────────────────────────────────
+        df.index.name = "Date"
+        df.sort_index(inplace=True)
+
+        safe_name = ticker.replace(".", "_").replace("^", "")
+        out_path  = os.path.join(OUTPUT_DIR, f"{safe_name}.csv")
+        df.to_csv(out_path)
+        print(f"         ✓ Saved → {out_path}  ({len(df)} rows, {len(df.columns)} cols)\n")
+
+    print("=" * 60)
+    print(f"  Done! All files saved in ./{OUTPUT_DIR}/")
+    print("=" * 60)
+
+
+if __name__ == "__main__":
+    main()
