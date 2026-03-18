@@ -1,0 +1,775 @@
+"""
+Multi-Index Stock Data Fetcher
+================================
+Fetches OHLCV + technical indicators + own index + VIX + Google Trends
+for every stock in the CAC40, S&P 500, and Singapore Straits Times Index.
+
+Structure:
+    ./cac40_data/      — 40 stocks  (index: CAC40)
+    ./sp500_data/      — 503 stocks (index: S&P 500)
+    ./sti_data/        — 30 stocks  (index: STI)
+
+Each stock only gets its OWN index merged in, plus VIX.
+
+Features:
+    - Resume support : already-completed CSVs are skipped automatically
+    - --skip-trends  : skip Google Trends (much faster, ~30min vs 10-15hrs)
+    - --index        : only run one index (cac40 | sp500 | sti)
+
+Dependencies:
+    pip install yfinance pandas pytrends ta
+
+Usage:
+    python fetch_all_stocks.py                        # full run
+    python fetch_all_stocks.py --skip-trends          # no Google Trends
+    python fetch_all_stocks.py --index sp500          # only S&P 500
+    python fetch_all_stocks.py --index sti --skip-trends
+"""
+
+import os
+import time
+import warnings
+import argparse
+import pandas as pd
+import yfinance as yf
+from pytrends.request import TrendReq
+import ta
+
+warnings.filterwarnings("ignore")
+
+# ─── CONFIG ──────────────────────────────────────────────────────────────────
+
+START_DATE   = "2000-01-01"
+TRENDS_SLEEP = 12          # seconds between pytrends requests (avoid 429s)
+
+VIX_TICKER   = "^VIX"
+
+# ─── INDEX DEFINITIONS ───────────────────────────────────────────────────────
+
+INDICES = {
+    "cac40": {
+        "label":      "CAC40",
+        "ticker":     "^FCHI",
+        "output_dir": "cac40_data",
+        "stocks": {
+            "Air Liquide":               "AI.PA",
+            "Airbus":                    "AIR.PA",
+            "ArcelorMittal":             "MT.AS",
+            "AXA":                       "CS.PA",
+            "BNP Paribas":               "BNP.PA",
+            "Bouygues":                  "EN.PA",
+            "Capgemini":                 "CAP.PA",
+            "Carrefour":                 "CA.PA",
+            "Saint-Gobain":              "SGO.PA",
+            "Credit Agricole":           "ACA.PA",
+            "Danone":                    "BN.PA",
+            "Dassault Systemes":         "DSY.PA",
+            "Engie":                     "ENGI.PA",
+            "EssilorLuxottica":          "EL.PA",
+            "Eurofins Scientific":       "ERF.PA",
+            "Hermes":                    "RMS.PA",
+            "Kering":                    "KER.PA",
+            "Legrand":                   "LR.PA",
+            "LOreal":                    "OR.PA",
+            "LVMH":                      "MC.PA",
+            "Michelin":                  "ML.PA",
+            "Orange":                    "ORA.PA",
+            "Pernod Ricard":             "RI.PA",
+            "Publicis":                  "PUB.PA",
+            "Renault":                   "RNO.PA",
+            "Safran":                    "SAF.PA",
+            "Sanofi":                    "SAN.PA",
+            "Schneider Electric":        "SU.PA",
+            "Societe Generale":          "GLE.PA",
+            "Stellantis":                "STLAM.MI",
+            "STMicroelectronics":        "STMPA.PA",
+            "Teleperformance":           "TEP.PA",
+            "Thales":                    "HO.PA",
+            "TotalEnergies":             "TTE.PA",
+            "Unibail-Rodamco-Westfield": "URW.PA",
+            "Veolia":                    "VIE.PA",
+            "Vinci":                     "DG.PA",
+            "Vivendi":                   "VIV.PA",
+            "Worldline":                 "WLN.PA",
+            "Alstom":                    "ALO.PA",
+        },
+    },
+
+    "sp500": {
+        "label":      "SP500",
+        "ticker":     "^GSPC",
+        "output_dir": "sp500_data",
+        "stocks": {
+            "3M":                        "MMM",
+            "Abbott Laboratories":       "ABT",
+            "AbbVie":                    "ABBV",
+            "Accenture":                 "ACN",
+            "Adobe":                     "ADBE",
+            "Advanced Micro Devices":    "AMD",
+            "AES":                       "AES",
+            "Agilent Technologies":      "A",
+            "Air Products":              "APD",
+            "Airbnb":                    "ABNB",
+            "Akamai":                    "AKAM",
+            "Albemarle":                 "ALB",
+            "Align Technology":          "ALGN",
+            "Allegion":                  "ALLE",
+            "Allstate":                  "ALL",
+            "Alphabet":                  "GOOGL",
+            "Amazon":                    "AMZN",
+            "Amcor":                     "AMCR",
+            "Ameren":                    "AEE",
+            "American Airlines":         "AAL",
+            "American Electric Power":   "AEP",
+            "American Express":          "AXP",
+            "American International Group": "AIG",
+            "American Tower":            "AMT",
+            "American Water Works":      "AWK",
+            "Ameriprise Financial":      "AMP",
+            "AMETEK":                    "AME",
+            "Amgen":                     "AMGN",
+            "Amphenol":                  "APH",
+            "Analog Devices":            "ADI",
+            "Ansys":                     "ANSS",
+            "Aon":                       "AON",
+            "APA":                       "APA",
+            "Apple":                     "AAPL",
+            "Applied Materials":         "AMAT",
+            "Aptiv":                     "APTV",
+            "Arch Capital":              "ACGL",
+            "Archer-Daniels-Midland":    "ADM",
+            "Arista Networks":           "ANET",
+            "Arthur J Gallagher":        "AJG",
+            "Assurant":                  "AIZ",
+            "AT&T":                      "T",
+            "Atmos Energy":              "ATO",
+            "Autodesk":                  "ADSK",
+            "Automatic Data Processing": "ADP",
+            "AutoNation":                "AN",
+            "AutoZone":                  "AZO",
+            "AvalonBay Communities":     "AVB",
+            "Avery Dennison":            "AVY",
+            "Axon Enterprise":           "AXON",
+            "Baker Hughes":              "BKR",
+            "Ball":                      "BALL",
+            "Bank of America":           "BAC",
+            "Bank of New York Mellon":   "BK",
+            "Bath & Body Works":         "BBWI",
+            "Baxter International":      "BAX",
+            "Becton Dickinson":          "BDX",
+            "Berkshire Hathaway":        "BRK-B",
+            "Bio-Rad":                   "BIO",
+            "Bio-Techne":                "TECH",
+            "Biogen":                    "BIIB",
+            "BlackRock":                 "BLK",
+            "Boeing":                    "BA",
+            "Booking Holdings":          "BKNG",
+            "BorgWarner":                "BWA",
+            "Boston Properties":         "BXP",
+            "Boston Scientific":         "BSX",
+            "Bristol-Myers Squibb":      "BMY",
+            "Broadcom":                  "AVGO",
+            "Broadridge Financial":      "BR",
+            "Brown & Brown":             "BRO",
+            "Brown-Forman":              "BF-B",
+            "Builders FirstSource":      "BLDR",
+            "Bunge Global":              "BG",
+            "Bureau Veritas":            "BV",
+            "Cadence Design Systems":    "CDNS",
+            "Camden Property":           "CPT",
+            "Campbell Soup":             "CPB",
+            "Capital One":               "COF",
+            "Cardinal Health":           "CAH",
+            "CarMax":                    "KMX",
+            "Carnival":                  "CCL",
+            "Carrier Global":            "CARR",
+            "Caterpillar":               "CAT",
+            "Cboe Global Markets":       "CBOE",
+            "CBRE Group":                "CBRE",
+            "CDW":                       "CDW",
+            "Celanese":                  "CE",
+            "Centene":                   "CNC",
+            "CenterPoint Energy":        "CNP",
+            "CF Industries":             "CF",
+            "Charles River Labs":        "CRL",
+            "Charles Schwab":            "SCHW",
+            "Charter Communications":    "CHTR",
+            "Chevron":                   "CVX",
+            "Chipotle":                  "CMG",
+            "Church & Dwight":           "CHD",
+            "Cigna":                     "CI",
+            "Cincinnati Financial":      "CINF",
+            "Cintas":                    "CTAS",
+            "Cisco":                     "CSCO",
+            "Citigroup":                 "C",
+            "Citizens Financial":        "CFG",
+            "Clorox":                    "CLX",
+            "CME Group":                 "CME",
+            "CMS Energy":                "CMS",
+            "Coca-Cola":                 "KO",
+            "Cognizant":                 "CTSH",
+            "Colgate-Palmolive":         "CL",
+            "Comcast":                   "CMCSA",
+            "Copart":                    "CPRT",
+            "Corning":                   "GLW",
+            "Corteva":                   "CTVA",
+            "CoStar Group":              "CSGP",
+            "Costco":                    "COST",
+            "Coterra Energy":            "CTRA",
+            "Crown Castle":              "CCI",
+            "CSX":                       "CSX",
+            "Cummins":                   "CMI",
+            "CVS Health":                "CVS",
+            "D.R. Horton":               "DHI",
+            "Danaher":                   "DHR",
+            "Darden Restaurants":        "DRI",
+            "DaVita":                    "DVA",
+            "Day One Biopharmaceuticals":"DAWN",
+            "Deckers Outdoor":           "DECK",
+            "Deere":                     "DE",
+            "Delta Air Lines":           "DAL",
+            "Devon Energy":              "DVN",
+            "Dexcom":                    "DXCM",
+            "Digital Realty":            "DLR",
+            "Discover Financial":        "DFS",
+            "Dollar General":            "DG",
+            "Dollar Tree":               "DLTR",
+            "Dominion Energy":           "D",
+            "Dover":                     "DOV",
+            "Dow":                       "DOW",
+            "DTE Energy":                "DTE",
+            "Duke Energy":               "DUK",
+            "Eastman Chemical":          "EMN",
+            "Eaton":                     "ETN",
+            "eBay":                      "EBAY",
+            "Ecolab":                    "ECL",
+            "Edison International":      "EIX",
+            "Edwards Lifesciences":      "EW",
+            "Electronic Arts":           "EA",
+            "Elevance Health":           "ELV",
+            "Emerson Electric":          "EMR",
+            "Entergy":                   "ETR",
+            "EOG Resources":             "EOG",
+            "EPAM Systems":              "EPAM",
+            "Equifax":                   "EFX",
+            "Equinix":                   "EQIX",
+            "Equity Residential":        "EQR",
+            "Essex Property":            "ESS",
+            "Estee Lauder":              "EL",
+            "Etsy":                      "ETSY",
+            "Eversource Energy":         "ES",
+            "Exelon":                    "EXC",
+            "Expedia":                   "EXPE",
+            "Expeditors International":  "EXPD",
+            "Extra Space Storage":       "EXR",
+            "ExxonMobil":                "XOM",
+            "F5":                        "FFIV",
+            "FactSet Research":          "FDS",
+            "Fastenal":                  "FAST",
+            "Federal Realty":            "FRT",
+            "FedEx":                     "FDX",
+            "Fidelity National Info":    "FIS",
+            "Fifth Third Bancorp":       "FITB",
+            "First Solar":               "FSLR",
+            "Fiserv":                    "FI",
+            "FleetCor Technologies":     "FLT",
+            "FMC":                       "FMC",
+            "Ford Motor":                "F",
+            "Fortinet":                  "FTNT",
+            "Fortive":                   "FTV",
+            "Fox":                       "FOXA",
+            "Franklin Resources":        "BEN",
+            "Freeport-McMoRan":          "FCX",
+            "Garmin":                    "GRMN",
+            "Gartner":                   "IT",
+            "GE Aerospace":              "GE",
+            "GE HealthCare":             "GEHC",
+            "Gen Digital":               "GEN",
+            "Generac":                   "GNRC",
+            "General Dynamics":          "GD",
+            "General Mills":             "GIS",
+            "General Motors":            "GM",
+            "Genuine Parts":             "GPC",
+            "Gilead Sciences":           "GILD",
+            "Global Payments":           "GPN",
+            "Globe Life":                "GL",
+            "Goldman Sachs":             "GS",
+            "Halliburton":               "HAL",
+            "Hartford Financial":        "HIG",
+            "Hasbro":                    "HAS",
+            "HCA Healthcare":            "HCA",
+            "Healthpeak Properties":     "DOC",
+            "Henry Schein":              "HSIC",
+            "Hershey":                   "HSY",
+            "Hess":                      "HES",
+            "Hewlett Packard Enterprise":"HPE",
+            "Hilton Worldwide":          "HLT",
+            "Hologic":                   "HOLX",
+            "Home Depot":                "HD",
+            "Honeywell":                 "HON",
+            "Hormel Foods":              "HRL",
+            "Host Hotels":               "HST",
+            "Howmet Aerospace":          "HWM",
+            "HP":                        "HPQ",
+            "Hubbell":                   "HUBB",
+            "Humana":                    "HUM",
+            "Huntington Bancshares":     "HBAN",
+            "Huntington Ingalls":        "HII",
+            "IDEX":                      "IEX",
+            "Illinois Tool Works":       "ITW",
+            "Illumina":                  "ILMN",
+            "Incyte":                    "INCY",
+            "Ingersoll Rand":            "IR",
+            "Installed Building Products":"IBP",
+            "Insulet":                   "PODD",
+            "Intel":                     "INTC",
+            "Intercontinental Exchange": "ICE",
+            "International Flavors":     "IFF",
+            "International Paper":       "IP",
+            "Interpublic Group":         "IPG",
+            "Intuit":                    "INTU",
+            "Intuitive Surgical":        "ISRG",
+            "Invesco":                   "IVZ",
+            "Iron Mountain":             "IRM",
+            "J.B. Hunt Transport":       "JBHT",
+            "Jack Henry & Associates":   "JKHY",
+            "Jabil":                     "JBL",
+            "Johnson & Johnson":         "JNJ",
+            "Johnson Controls":          "JCI",
+            "JPMorgan Chase":            "JPM",
+            "Juniper Networks":          "JNPR",
+            "Kellanova":                 "K",
+            "Keurig Dr Pepper":          "KDP",
+            "KeyCorp":                   "KEY",
+            "Keysight Technologies":     "KEYS",
+            "Kimberly-Clark":            "KMB",
+            "Kimco Realty":              "KIM",
+            "Kinder Morgan":             "KMI",
+            "KLA":                       "KLAC",
+            "L3Harris Technologies":     "LHX",
+            "Labcorp":                   "LH",
+            "Lam Research":              "LRCX",
+            "Lamb Weston":               "LW",
+            "Las Vegas Sands":           "LVS",
+            "Leidos":                    "LDOS",
+            "Lennar":                    "LEN",
+            "Lincoln National":          "LNC",
+            "LKQ":                       "LKQ",
+            "Lockheed Martin":           "LMT",
+            "Loews":                     "L",
+            "Lowe's":                    "LOW",
+            "LPL Financial":             "LPLA",
+            "Lumen Technologies":        "LUMN",
+            "LyondellBasell":            "LYB",
+            "Mara Holdings":             "MARA",
+            "Marathon Oil":              "MRO",
+            "Marathon Petroleum":        "MPC",
+            "MarketAxess":               "MKTX",
+            "Marriott International":    "MAR",
+            "Marsh McLennan":            "MMC",
+            "Masco":                     "MAS",
+            "Mastercard":                "MA",
+            "McCormick":                 "MKC",
+            "McDonald's":                "MCD",
+            "McKesson":                  "MCK",
+            "Medtronic":                 "MDT",
+            "Merck":                     "MRK",
+            "Meta Platforms":            "META",
+            "MetLife":                   "MET",
+            "Mettler-Toledo":            "MTD",
+            "Microsoft":                 "MSFT",
+            "Mid-America Apartment":     "MAA",
+            "Moderna":                   "MRNA",
+            "Mohawk Industries":         "MHK",
+            "Molina Healthcare":         "MOH",
+            "Molson Coors":              "TAP",
+            "Mondelez":                  "MDLZ",
+            "MongoDB":                   "MDB",
+            "Monolithic Power Systems":  "MPWR",
+            "Monster Beverage":          "MNST",
+            "Moody's":                   "MCO",
+            "Morgan Stanley":            "MS",
+            "Mosaic":                    "MOS",
+            "MSCI":                      "MSCI",
+            "Nasdaq":                    "NDAQ",
+            "NetApp":                    "NTAP",
+            "Netflix":                   "NFLX",
+            "Newmont":                   "NEM",
+            "News Corp":                 "NWSA",
+            "NextEra Energy":            "NEE",
+            "Nike":                      "NKE",
+            "NiSource":                  "NI",
+            "Norfolk Southern":          "NSC",
+            "Northern Trust":            "NTRS",
+            "Northrop Grumman":          "NOC",
+            "Norwegian Cruise Line":     "NCLH",
+            "NRG Energy":                "NRG",
+            "Nucor":                     "NUE",
+            "Nvidia":                    "NVDA",
+            "NVR":                       "NVR",
+            "Occidental Petroleum":      "OXY",
+            "Omnicom":                   "OMC",
+            "ON Semiconductor":          "ON",
+            "Oracle":                    "ORCL",
+            "Otis Worldwide":            "OTIS",
+            "Packaging Corp":            "PKG",
+            "Palo Alto Networks":        "PANW",
+            "Parker Hannifin":           "PH",
+            "Paychex":                   "PAYX",
+            "PayPal":                    "PYPL",
+            "Penn Entertainment":        "PENN",
+            "Pentair":                   "PNR",
+            "PepsiCo":                   "PEP",
+            "Pfizer":                    "PFE",
+            "Philip Morris":             "PM",
+            "Phillips 66":               "PSX",
+            "PNC Financial":             "PNC",
+            "Pool":                      "POOL",
+            "PPG Industries":            "PPG",
+            "PPL":                       "PPL",
+            "Principal Financial":       "PFG",
+            "Procter & Gamble":          "PG",
+            "Progressive":               "PGR",
+            "Prologis":                  "PLD",
+            "Prudential Financial":      "PRU",
+            "Public Storage":            "PSA",
+            "PulteGroup":                "PHM",
+            "Qualcomm":                  "QCOM",
+            "Quest Diagnostics":         "DGX",
+            "Raymond James":             "RJF",
+            "Realty Income":             "O",
+            "Regency Centers":           "REG",
+            "Regeneron":                 "REGN",
+            "Republic Services":         "RSG",
+            "ResMed":                    "RMD",
+            "Revvity":                   "RVTY",
+            "Robert Half":               "RHI",
+            "Rockwell Automation":       "ROK",
+            "Rollins":                   "ROL",
+            "Royal Caribbean":           "RCL",
+            "RTX":                       "RTX",
+            "S&P Global":                "SPGI",
+            "Salesforce":                "CRM",
+            "SBA Communications":        "SBAC",
+            "Schlumberger":              "SLB",
+            "Seagate Technology":        "STX",
+            "Sempra":                    "SRE",
+            "ServiceNow":                "NOW",
+            "Sherwin-Williams":          "SHW",
+            "Simon Property Group":      "SPG",
+            "Skyworks Solutions":        "SWKS",
+            "Snap-on":                   "SNA",
+            "Solventum":                 "SOLV",
+            "Southern Company":          "SO",
+            "Southwest Airlines":        "LUV",
+            "Stanley Black & Decker":    "SWK",
+            "Starbucks":                 "SBUX",
+            "State Street":              "STT",
+            "Steel Dynamics":            "STLD",
+            "Steris":                    "STE",
+            "Stryker":                   "SYK",
+            "Super Micro Computer":      "SMCI",
+            "Suzuki Motor":              "SZKMY",
+            "Synchrony Financial":       "SYF",
+            "Synopsys":                  "SNPS",
+            "sysco":                     "SYY",
+            "T-Mobile":                  "TMUS",
+            "T. Rowe Price":             "TROW",
+            "Take-Two Interactive":      "TTWO",
+            "Tapestry":                  "TPR",
+            "Targa Resources":           "TRGP",
+            "Target":                    "TGT",
+            "TE Connectivity":           "TEL",
+            "Teradyne":                  "TER",
+            "Tesla":                     "TSLA",
+            "Texas Instruments":         "TXN",
+            "Textron":                   "TXT",
+            "Thermo Fisher Scientific":  "TMO",
+            "Tractor Supply":            "TSCO",
+            "Travelers":                 "TRV",
+            "Trane Technologies":        "TT",
+            "TransDigm Group":           "TDG",
+            "Truist Financial":          "TFC",
+            "Tyler Technologies":        "TYL",
+            "Uber":                      "UBER",
+            "UDR":                       "UDR",
+            "Ulta Beauty":               "ULTA",
+            "Union Pacific":             "UNP",
+            "United Airlines":           "UAL",
+            "United Parcel Service":     "UPS",
+            "United Rentals":            "URI",
+            "UnitedHealth Group":        "UNH",
+            "US Bancorp":                "USB",
+            "Valero Energy":             "VLO",
+            "Ventas":                    "VTR",
+            "Verisign":                  "VRSN",
+            "Verisk Analytics":          "VRSK",
+            "Verizon":                   "VZ",
+            "Vertex Pharmaceuticals":    "VRTX",
+            "Visa":                      "V",
+            "Vistra":                    "VST",
+            "VMware":                    "VMW",
+            "Vulcan Materials":          "VMC",
+            "W.R. Berkley":              "WRB",
+            "W.W. Grainger":             "GWW",
+            "Walgreens Boots Alliance":  "WBA",
+            "Walmart":                   "WMT",
+            "Walt Disney":               "DIS",
+            "Waters":                    "WAT",
+            "Welltower":                 "WELL",
+            "Wells Fargo":               "WFC",
+            "West Pharmaceutical":       "WST",
+            "Western Digital":           "WDC",
+            "Western Union":             "WU",
+            "Westinghouse Air Brake":    "WAB",
+            "Weyerhaeuser":              "WY",
+            "Williams Companies":        "WMB",
+            "Willis Towers Watson":      "WTW",
+            "WL Gore":                   "GORE",
+            "Workday":                   "WDAY",
+            "Xcel Energy":               "XEL",
+            "Xylem":                     "XYL",
+            "Yum! Brands":               "YUM",
+            "Zebra Technologies":        "ZBRA",
+            "Zimmer Biomet":             "ZBH",
+            "Zoetis":                    "ZTS",
+        },
+    },
+
+    "sti": {
+        "label":      "STI",
+        "ticker":     "^STI",
+        "output_dir": "sti_data",
+        "stocks": {
+            "DBS Group":                 "D05.SI",
+            "OCBC Bank":                 "O39.SI",
+            "UOB":                       "U11.SI",
+            "Singapore Telecom":         "Z74.SI",
+            "Jardine Matheson":          "J36.SI",
+            "Jardine Cycle & Carriage":  "C07.SI",
+            "CapitaLand Investment":      "9CI.SI",
+            "Wilmar International":      "F34.SI",
+            "Keppel":                    "BN4.SI",
+            "Singapore Airlines":        "C6L.SI",
+            "Genting Singapore":         "G13.SI",
+            "City Developments":         "C09.SI",
+            "ComfortDelGro":             "C52.SI",
+            "Frasers Logistics Trust":   "BUOU.SI",
+            "Hongkong Land":             "H78.SI",
+            "CapitaLand Ascendas REIT":  "A17U.SI",
+            "CapitaLand Integrated Comm":"C38U.SI",
+            "Mapletree Pan Asia Comm":   "N2IU.SI",
+            "Mapletree Logistics Trust": "M44U.SI",
+            "Mapletree Industrial Trust":"ME8U.SI",
+            "Thai Beverage":             "Y92.SI",
+            "UOL Group":                 "U14.SI",
+            "Venture":                   "V03.SI",
+            "Yangzijiang Shipbuilding":  "BS6.SI",
+            "Sembcorp Industries":       "U96.SI",
+            "ST Engineering":            "S63.SI",
+            "Seatrium":                  "S51.SI",
+            "SATS":                      "S58.SI",
+            "Emperador":                 "EMF.SI",
+            "Frasers Centrepoint Trust": "J69U.SI",
+        },
+    },
+}
+
+# ─── HELPERS ─────────────────────────────────────────────────────────────────
+
+def flatten_columns(df: pd.DataFrame) -> pd.DataFrame:
+    if isinstance(df.columns, pd.MultiIndex):
+        df.columns = df.columns.get_level_values(0)
+    return df
+
+
+def compute_indicators(df: pd.DataFrame) -> pd.DataFrame:
+    close = df["Close"]
+
+    df["MA20"]          = close.rolling(20).mean()
+    df["MA50"]          = close.rolling(50).mean()
+    df["Momentum"]      = close.diff(10)
+    df["RSI"]           = ta.momentum.RSIIndicator(close, window=14).rsi()
+
+    macd = ta.trend.MACD(close, window_slow=26, window_fast=12, window_sign=9)
+    df["MACD"]          = macd.macd()
+    df["MACD_Signal"]   = macd.macd_signal()
+    df["MACD_Hist"]     = macd.macd_diff()
+
+    df["Volatility_20d"] = close.pct_change().rolling(20).std() * (252 ** 0.5)
+
+    bb = ta.volatility.BollingerBands(close, window=20, window_dev=2)
+    df["BB_Upper"]      = bb.bollinger_hband()
+    df["BB_Lower"]      = bb.bollinger_lband()
+    df["BB_Mid"]        = bb.bollinger_mavg()
+
+    return df
+
+
+def fetch_google_trends(keyword: str, start_year: int = 2004) -> pd.Series:
+    try:
+        pytrends    = TrendReq(hl="en-US", tz=0)
+        all_chunks  = []
+        current_year = pd.Timestamp.today().year
+
+        for chunk_start in range(start_year, current_year + 1, 5):
+            chunk_end = min(chunk_start + 4, current_year)
+            pytrends.build_payload(
+                [keyword], cat=0,
+                timeframe=f"{chunk_start}-01-01 {chunk_end}-12-31",
+                geo="", gprop=""
+            )
+            data = pytrends.interest_over_time()
+            if not data.empty and keyword in data.columns:
+                all_chunks.append(data[[keyword]])
+            time.sleep(TRENDS_SLEEP)
+
+        if not all_chunks:
+            return pd.Series(dtype=float, name="Google_Trends")
+
+        trends = pd.concat(all_chunks)
+        trends = trends[~trends.index.duplicated(keep="last")]
+        trends.index = pd.to_datetime(trends.index)
+        daily = trends[keyword].resample("D").interpolate(method="linear")
+        daily.name = "Google_Trends"
+        return daily
+
+    except Exception as e:
+        print(f"      [!] Trends failed for '{keyword}': {e}")
+        return pd.Series(dtype=float, name="Google_Trends")
+
+
+def download_index(label: str, ticker: str) -> pd.DataFrame:
+    raw = yf.download(ticker, start=START_DATE, auto_adjust=True, progress=False)
+    raw = flatten_columns(raw)
+    raw.index = pd.to_datetime(raw.index)
+    raw.columns = [f"{label}_{c}" for c in raw.columns]
+    return raw
+
+
+# ─── CORE PROCESSING ─────────────────────────────────────────────────────────
+
+def process_index(index_key: str, cfg: dict,
+                  vix_close: pd.Series,
+                  skip_trends: bool):
+
+    label      = cfg["label"]
+    output_dir = cfg["output_dir"]
+    stocks     = cfg["stocks"]
+    os.makedirs(output_dir, exist_ok=True)
+
+    print(f"\n{'='*60}")
+    print(f"  Processing {label} — {len(stocks)} stocks")
+    print(f"  Output dir : ./{output_dir}/")
+    print(f"{'='*60}\n")
+
+    # Download own index
+    print(f"  Downloading {label} index ({cfg['ticker']}) ...")
+    try:
+        idx_df = download_index(label, cfg["ticker"])
+        print(f"  {len(idx_df)} trading days fetched.\n")
+    except Exception as e:
+        print(f"  [!] Could not download index: {e}. Continuing without it.\n")
+        idx_df = pd.DataFrame()
+
+    total = len(stocks)
+    for i, (company_name, ticker) in enumerate(stocks.items(), 1):
+        safe_name = ticker.replace(".", "_").replace("^", "").replace("-", "_")
+        out_path  = os.path.join(output_dir, f"{safe_name}.csv")
+
+        # ── Resume: skip if already done ──────────────────────────────────
+        if os.path.exists(out_path):
+            print(f"  [{i:03d}/{total}] {company_name} — already exists, skipping.")
+            continue
+
+        print(f"  [{i:03d}/{total}] {company_name} ({ticker})")
+
+        # ── Download OHLCV ────────────────────────────────────────────────
+        try:
+            raw = yf.download(ticker, start=START_DATE,
+                              auto_adjust=True, progress=False)
+            if raw.empty:
+                print(f"    [!] No data, skipping.\n")
+                continue
+            raw = flatten_columns(raw)
+            raw.index = pd.to_datetime(raw.index)
+        except Exception as e:
+            print(f"    [!] Download failed: {e}\n")
+            continue
+
+        # ── Technical indicators ──────────────────────────────────────────
+        df = compute_indicators(raw.copy())
+
+        # ── Merge own index ───────────────────────────────────────────────
+        if not idx_df.empty:
+            df = df.join(idx_df, how="left")
+
+        # ── Merge VIX ─────────────────────────────────────────────────────
+        df = df.join(vix_close, how="left")
+
+        # ── Google Trends ─────────────────────────────────────────────────
+        if not skip_trends:
+            print(f"    Fetching Google Trends ...")
+            trends = fetch_google_trends(company_name)
+            df["Google_Trends"] = trends if not trends.empty else float("nan")
+            df = df.join(
+                trends.rename("Google_Trends"), how="left"
+            ) if not trends.empty else df.assign(Google_Trends=float("nan"))
+        else:
+            df["Google_Trends"] = float("nan")
+
+        # ── Save ──────────────────────────────────────────────────────────
+        df.index.name = "Date"
+        df.sort_index(inplace=True)
+        df.to_csv(out_path)
+        print(f"    Saved -> {out_path}  ({len(df)} rows, {len(df.columns)} cols)\n")
+
+
+# ─── MAIN ────────────────────────────────────────────────────────────────────
+
+def main():
+    parser = argparse.ArgumentParser(description="Multi-index stock data fetcher")
+    parser.add_argument(
+        "--skip-trends", action="store_true",
+        help="Skip Google Trends (much faster)"
+    )
+    parser.add_argument(
+        "--index", choices=["cac40", "sp500", "sti"],
+        help="Only process one index (default: all three)"
+    )
+    args = parser.parse_args()
+
+    print("=" * 60)
+    print("  Multi-Index Stock Data Fetcher")
+    total_stocks = sum(len(v["stocks"]) for v in INDICES.values())
+    print(f"  Total stocks : {total_stocks}")
+    print(f"  Google Trends: {'DISABLED' if args.skip_trends else 'ENABLED'}")
+    if args.index:
+        print(f"  Running only : {args.index.upper()}")
+    print("=" * 60)
+
+    # Download VIX once — shared across all indices
+    print(f"\nDownloading VIX ({VIX_TICKER}) ...")
+    vix_raw   = yf.download(VIX_TICKER, start=START_DATE,
+                             auto_adjust=True, progress=False)
+    vix_raw   = flatten_columns(vix_raw)
+    vix_close = vix_raw["Close"].copy()
+    vix_close.name = "VIX_Close"
+    vix_close.index = pd.to_datetime(vix_close.index)
+    print(f"  {len(vix_close)} trading days fetched.")
+
+    # Run selected indices
+    keys_to_run = [args.index] if args.index else list(INDICES.keys())
+    for key in keys_to_run:
+        process_index(key, INDICES[key], vix_close, args.skip_trends)
+
+    print("\n" + "=" * 60)
+    print("  All done!")
+    print(f"  cac40_data/  -> CAC40 stocks")
+    print(f"  sp500_data/  -> S&P 500 stocks")
+    print(f"  sti_data/    -> STI stocks")
+    print("=" * 60)
+
+
+if __name__ == "__main__":
+    main()
