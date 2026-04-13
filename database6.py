@@ -17,6 +17,8 @@ import warnings
 import pandas as pd
 import yfinance as yf
 import ta
+from pathlib import Path
+
 
 warnings.filterwarnings("ignore")
 
@@ -601,8 +603,18 @@ def flatten_columns(df: pd.DataFrame) -> pd.DataFrame:
         df.columns = df.columns.get_level_values(0)
     return df
 
+def sanitize_name(ticker: str): 
+    table = str.maketrans({ 
+        ".": "_",
+        "-": "_",
+        "^": "",
+        " ": "_" }) 
+    return ticker.translate(table)
 
+# ─── Paramètres ─────────────────────────────────────────────────────────
 def compute_indicators(df: pd.DataFrame) -> pd.DataFrame:
+    
+    
     close = df["Close"]
 
     df["MA20"]          = close.rolling(20).mean()
@@ -621,17 +633,7 @@ def compute_indicators(df: pd.DataFrame) -> pd.DataFrame:
     df["BB_Upper"]      = bb.bollinger_hband()
     df["BB_Lower"]      = bb.bollinger_lband()
     df["BB_Mid"]        = bb.bollinger_mavg()
-    df = df.iloc[50:]
     return df
-
-
-def download_index(label: str, ticker: str) -> pd.DataFrame:
-    raw = yf.download(ticker, start=START_DATE, auto_adjust=True, progress=False)
-    raw = flatten_columns(raw)
-    raw.index = pd.to_datetime(raw.index)
-    raw.columns = [f"{label}_{c}" for c in raw.columns]
-    
-    return raw
 
 def download_VIX():
     print(f"\nDownloading VIX ({VIX_TICKER}) ...")
@@ -644,131 +646,156 @@ def download_VIX():
     print(f"  {len(vix_close)} trading days fetched.")
     return vix_close
 
-def arboraissance(market):
+def sanitize_name(ticker: str) -> str:
+    table = str.maketrans({
+        ".": "_",
+        "-": "_",
+        "^": "",
+        " ": "_"
+    })
+    return ticker.translate(table)
+
+
+        
+
     
-    base_path = os.path.join("data_base", market)
-    
-    for sec in secteur:
-        name = sec.replace(" ", "_")
-        output_dir = os.path.join(base_path, name)
-        os.makedirs(output_dir, exist_ok=True)
-        
-def create_csv(df,ticker,output_dir,sector):
-    safe_name = ticker.replace(".", "_").replace("^", "").replace("-", "_")
-    Path=f"data_base/{output_dir}/{sector}"
-    out_path  = os.path.join(Path, f"{safe_name}.csv")
-    
-    df.index.name = "Date"
-    df.sort_index(inplace=True)
-    df.to_csv(f"{out_path}")
-    print(f"    Saved -> {out_path}  ({len(df)} rows, {len(df.columns)} cols)\n")
-    
-def all_csv(stocks,idx_df,vix_close,total,output_dir):
-    
-    tickers = list(stocks.values())
 
-    df_all = yf.download(
-        tickers,
-        start=START_DATE,
-        group_by="ticker",
-        auto_adjust=True,
-        progress=False
-    )
-    for i, (company_name, ticker) in enumerate(stocks.items(), 1):
-        print(f"  [{i:03d}/{total}] {company_name} ({ticker})")
-
-        # ── Download OHLCV ────────────────────────────────────────────────
-        if len(tickers) == 1:
-            raw = df_all.copy()
-        else:
-            raw = df_all[ticker].copy()
-        sector = TICKER_SECTOR.get(ticker, "Unknown")
-        
-        # ── Technical indicators ──────────────────────────────────────────
-        
-        df = compute_indicators(raw.copy())
-        
-        # ── Merge own index ───────────────────────────────────────────────
-        
-        if not idx_df.empty:
-            df = df.join(idx_df, how="left")
-
-        # ── Merge VIX ─────────────────────────────────────────────────────
-        
-        df = df.join(vix_close, how="left")
-
-
-        # ── Round all numeric columns to 3 decimal places ─────────────────
-        num_cols = df.select_dtypes(include="number").columns
-        df[num_cols] = df[num_cols].round(3)
-
-        # ── Save ──────────────────────────────────────────────────────────
-        create_csv(df,ticker,output_dir,sector)
         
 # ─── CORE PROCESSING ─────────────────────────────────────────────────────────
-def download_sector_indices(secteur_dict):
-    output_dir = os.path.join("data_base", "sector_indices")
-    os.makedirs(output_dir, exist_ok=True)
+# ─── Arboraissance ─────────────────────────────────────────────────────────
+def arborescence_action(market):
+    base_path = Path("data_base") / market
 
+    paths = [
+        base_path / sanitize_name(sec)
+        for sec in secteur
+    ]
+
+    create_dirs(paths)
+
+def create_dirs(paths: list[Path]):
+    for path in paths:
+        path.mkdir(parents=True, exist_ok=True)
+        
+def arborescence_indice():
+    base_dir = Path("data_base")
+    
+    paths={
+    "sector": base_dir / "sector_indices",
+    "bourse": base_dir / "bourse_indices"
+    }
+    
+    create_dirs(paths.values())
+    return paths
+
+def create_csv(df: pd.DataFrame,out_dir):
+    df.to_csv(f"{out_dir}")
+    
+
+# ─── Indice ─────────────────────────────────────────────────────────
+    
+def download_indices(name, ticker,chemin):
+    
+
+    try:
+        # Téléchargement
+        df = yf.download(ticker, start=START_DATE, auto_adjust=True, progress=False)
+        df = flatten_columns(df)
+        df.index = pd.to_datetime(df.index)
+
+        # Calcul indicateurs techniques
+        df = compute_indicators(df)
+        
+        # Ajout des rendements
+        df["Return_1d"] = df["Close"].pct_change()
+        df["Return_5d"] = df["Close"].pct_change(5)
+
+        # Normalisation base 100
+        df["Normalized"] = df["Close"] / df["Close"].iloc[0] * 100
+
+        # Sauvegarde
+        out_path = chemin / f"{sanitize_name(name)}.csv"
+        create_csv(df,out_path)
+        print(f"  Saved -> {out_path} ({len(df)} rows, {len(df.columns)} cols)")
+
+    except Exception as e:
+        print(f"  Error: {e}")
+
+def gestion_indices(secteur_dict,bourse):
+    
+    paths=arborescence_indice()
+    sector_dir = paths["sector"]
+    bourse_dir = paths["bourse"]
+    
     for sector, ticker in secteur_dict.items():
         print(f"\nDownloading sector: {sector}")
 
         if not ticker:
             print("  Skipped (no ticker)")
             continue
-
-        try:
-            # Téléchargement
-            df = yf.download(ticker, start=START_DATE, auto_adjust=True, progress=False)
-            df = flatten_columns(df)
-            df.index = pd.to_datetime(df.index)
-
-            # Calcul indicateurs techniques
-            df = compute_indicators(df)
-            
-            # Ajout des rendements
-            df["Return_1d"] = df["Close"].pct_change()
-            df["Return_5d"] = df["Close"].pct_change(5)
-
-            # Normalisation base 100
-            df["Normalized"] = df["Close"] / df["Close"].iloc[0] * 100
-
-            # Sauvegarde
-            out_path = os.path.join(output_dir, f"{sector.replace(' ', '_')}.csv")
-            df.to_csv(out_path)
-            print(f"  Saved -> {out_path} ({len(df)} rows, {len(df.columns)} cols)")
-
-        except Exception as e:
-            print(f"  Error: {e}")
-    for bourse,i in list(INDICES.items()):
-        tickers = i["ticker"]
+        
+        download_indices(sector, ticker, sector_dir)
+        
+    for bourse,data in bourse.items():
+        print(f"\nDownloading sector: {bourse}")
+        tickers = data["ticker"]
+        
         if not tickers:
             print("  Skipped (no tickers)")
             continue
+        
+        download_indices(bourse, tickers, bourse_dir)
 
-        try:
-            # Téléchargement
-            df = yf.download(tickers, start=START_DATE, auto_adjust=True, progress=False)
-            df = flatten_columns(df)
-            df.index = pd.to_datetime(df.index)
+# ─── Action ─────────────────────────────────────────────────────────
+def download_all_action(ticker):
+    df_all_action = yf.download(
+        ticker,
+        start=START_DATE,
+        group_by="ticker",
+        auto_adjust=True,
+        progress=False
+    )
+    return df_all_action
 
-            # Calcul indicateurs techniques
-            df = compute_indicators(df)
-            # Ajout des rendements
-            df["Return_1d"] = df["Close"].pct_change()
-            df["Return_5d"] = df["Close"].pct_change(5)
+def gestion_action(stocks,vix_close,total,output_dir):
+    
+    tickers = list(stocks.values())
 
-            # Normalisation base 100
-            df["Normalized"] = df["Close"] / df["Close"].iloc[0] * 100
-
-            # Sauvegarde
-            out_path = os.path.join(output_dir, f"{bourse}.csv")
-            df.to_csv(out_path)
-            print(f"  Saved -> {out_path} ({len(df)} rows, {len(df.columns)} cols)")
-
-        except Exception as e:
-            print(f"  Error: {e}")
+    df_all=download_all_action(tickers)
+    
+    for i, (company_name, ticker) in enumerate(stocks.items(), 1):
+        print(f"  [{i:03d}/{total}] {company_name} ({ticker})")
+        # ── Download OHLCV ────────────────────────────────────────────────
+        if len(tickers) == 1:
+            raw = df_all.copy()
+        else:
+            raw = df_all[ticker].copy()
             
+        raw = flatten_columns(raw)
+        
+        sector = TICKER_SECTOR.get(ticker, "Unknown")
+        
+        # ── Technical indicators ──────────────────────────────────────────
+       
+        if raw.empty or "Close" not in raw.columns:
+            print(f"    Skipped {ticker} (no data)")
+            continue
+        
+        df = compute_indicators(raw.copy())
+        
+        # ── Merge VIX ───────────────────────────────────────────────────── 
+        df = df.join(vix_close, how="left")
+
+        # ── Round all numeric columns to 3 decimal places ─────────────────
+        num_cols = df.select_dtypes(include="number").columns
+        df[num_cols] = df[num_cols].round(3)
+        
+        df.index.name = "Date"
+        
+        df.sort_index(inplace=True)
+        # ── Save ──────────────────────────────────────────────────────────
+        create_action_csv(df,ticker,output_dir,sector)
+        
 def process_index(index_key, cfg, vix_close):
 
     label= cfg["label"]
@@ -776,8 +803,14 @@ def process_index(index_key, cfg, vix_close):
     ticker     = cfg["ticker"]     # "^FCHI"
     output_dir = cfg["output_dir"]  # "cac40_data"
     
-    arboraissance(output_dir)
+    arborescence_action(output_dir)
         
+    print_chargement(stocks,label,output_dir,ticker)
+    
+    total = len(stocks)
+    gestion_action(stocks,vix_close,total,output_dir)
+
+def print_chargement(stocks,label,output_dir,ticker):
     print(f"\n{'='*60}")
     print(f"  Processing {label} — {len(stocks)} stocks")
     print(f"  Output dir : ./{output_dir}/")
@@ -785,49 +818,67 @@ def process_index(index_key, cfg, vix_close):
 
     # Download own index
     print(f"  Downloading {label} index ({ticker}) ...")
-    try:
-        idx_df = download_index(label, ticker)
-        print(f"  {len(idx_df)} trading days fetched.\n")
-    except Exception as e:
-        print(f"  [!] Could not download index: {e}. Continuing without it.\n")
-        idx_df = pd.DataFrame()
-
-    total = len(stocks)
-    all_csv(stocks,idx_df,vix_close,total,output_dir)
+    
+def create_action_csv(df,ticker,output_dir,sector):
+    output_path = Path("data_base") / output_dir / sector
+    sector_dir = output_path / f"{sanitize_name(ticker)}.csv" 
+    
+    create_csv(df,sector_dir)
+    
+    print(f"    Saved -> {sector_dir}  ({len(df)} rows, {len(df.columns)} cols)\n")
 
 
 # ─── MAIN ────────────────────────────────────────────────────────────────────
 
-def main():
-    # ── CONFIGURE HERE ────────────────────────────────────────────────────────
-    
-    RUN_INDEX = None
-    # ─────────────────────────────────────────────────────────────────────────
-    
-    download_sector_indices(secteur)
+def print_header(config, indices):
     print("=" * 60)
     print("  Multi-Index Stock Data Fetcher")
-    total_stocks = sum(len(v["stocks"]) for v in INDICES.values())
+
+    total_stocks = count_total_stocks(indices)
     print(f"  Total stocks : {total_stocks}")
-    if RUN_INDEX:
-        print(f"  Running only : {RUN_INDEX.upper()}")
+
+    if config["run_index"]:
+        print(f"  Running only : {config['run_index'].upper()}")
+
     print("=" * 60)
 
-    # Download VIX once — shared across all indices
-    vix_close = download_VIX() 
+def count_total_stocks(indices: dict):
+    return sum(len(v["stocks"]) for v in indices.values())
 
-    # Run selected indices
-    keys_to_run = [RUN_INDEX] if RUN_INDEX else list(INDICES.keys())
+def run_indices(indices, run_index, vix_close):
+    if run_index:
+        keys_to_run = [run_index]
+    else:
+        keys_to_run = list(indices.keys())
+
     for key in keys_to_run:
-        process_index(key, INDICES[key], vix_close)
+        process_index(key, indices[key], vix_close)
 
+def print_footer(indices):
     print("\n" + "=" * 60)
     print("  All done!")
-    print("  cac40_data/  -> CAC40 stocks")
-    print("  sp500_data/  -> S&P 500 stocks")
-    print("  sti_data/    -> STI stocks")
+
+    for key in indices:
+        print(f"  {key}_data/ -> {key.upper()} stocks")
+
     print("=" * 60)
+
+def main():
+    CONFIG = {
+        "run_index": None, #=====> remplacer par une bourse spécifique == exemple: "cac40" 
+    }
+
+    gestion_indices(secteur, INDICES)
+
+    print_header(CONFIG, INDICES)
+
+    vix_close = download_VIX()
+
+    run_indices(INDICES, CONFIG["run_index"], vix_close)
+
+    print_footer(INDICES)
 
 
 if __name__ == "__main__":
+    main()
     main()
