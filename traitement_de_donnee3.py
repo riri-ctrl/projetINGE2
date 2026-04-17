@@ -95,12 +95,12 @@ def load_actions(base_path):
         for sector in os.listdir(market_path):
             sector_path = os.path.join(market_path, sector)
 
-            if not os.path.isdir(sector_path):
+            if not os.path.isdir(sector_path) or sector.lower() == "unknown":
                 continue
 
             for file in os.listdir(sector_path):
 
-                if not file.endswith(".csv"):
+                if not file.endswith(".csv") :
                     continue
 
                 file_path = os.path.join(sector_path, file)
@@ -131,8 +131,10 @@ def label_encoder(df,colonne,labelencoder):
     df[colonne]= labelencoder.fit_transform(df[colonne])
 
 def clean_all_dataframe(fill_actions,fill_sectors,fill_bourses):
-    fill_actions = pd.get_dummies(fill_actions, columns=["Market", "Sector"])
     
+    fill_actions["Market"] = LabelEncoder().fit_transform(fill_actions["Market"])
+    
+    fill_actions["Sector"] = LabelEncoder().fit_transform(fill_actions["Sector"])
     fill_actions['Ticker'] = LabelEncoder().fit_transform(fill_actions['Ticker'])
     fill_sectors['indice'] = LabelEncoder().fit_transform(fill_sectors['indice'])
     fill_bourses['indice'] = LabelEncoder().fit_transform(fill_bourses['indice'])
@@ -148,18 +150,67 @@ def load_all():
     # actions
     actions = load_actions(BASE_PATH)
     print(f"\n✅ Loaded {len(actions)+len(sectors)+len(bourses)} files")
-    return sectors,bourses,actions
+    return actions,sectors,bourses
 
 def concat_dataframe():
     
-    indices,bourses,actions=load_all()
+    actions,sectors,bourses=load_all()
     
     # ── Fusion ──
-    fill_indice= fusion(indices)
+    fill_sectors= fusion(sectors)
     fill_action = fusion(actions)
     fill_bourse = fusion(bourses)
-    return fill_action,fill_indice,fill_bourse
+    return fill_action,fill_sectors,fill_bourse
+
+def prepare_external_df(df, key_name, suffix):
     
+    df = df.rename(columns={"indice": key_name})
+
+    cols_to_rename = {
+        col: f"{col}_{suffix}"
+        for col in df.columns
+        if col not in ["Date", key_name,"is_trading_day"]
+    }
+
+    df = df.rename(columns=cols_to_rename)
+
+    return df
+
+def merge_dataset(left_df, right_df, keys):
+    
+    return left_df.merge(
+        right_df,
+        on=keys,
+        how="left"
+    )
+    
+def merge_all_datasets(actions, sectors, bourses):
+
+    sectors = prepare_external_df(
+        sectors,
+        key_name="Sector",
+        suffix="sector"
+    )
+
+    bourses = prepare_external_df(
+        bourses,
+        key_name="Market",
+        suffix="bourse"
+    )
+
+    df = merge_dataset(
+        actions,
+        sectors.drop(columns=["is_trading_day"]),
+        ["Date", "Sector"]
+    )
+
+    df = merge_dataset(
+        df,
+        bourses.drop(columns=["is_trading_day"]),
+        ["Date", "Market"]
+    )
+
+    return df
 
 def main():  
     
@@ -170,10 +221,18 @@ def main():
     dataframe_info(fill_actions)
     dataframe_info(fill_bourses)
     dataframe_info(fill_sectors)
-    return fill_sectors,fill_actions,fill_bourses
+    
+    final_df = merge_all_datasets(
+    fill_actions,
+    fill_sectors,
+    fill_bourses
+    )
+    dataframe_info(final_df)
+    
+    return fill_actions,fill_sectors,fill_bourses,final_df
 
 if __name__ == "__main__":
-    fill_sectors,fill_actions,fill_bourses=main()
+    fill_actions,fill_sectors,fill_bourses, final_df=main()
 
 
 
