@@ -212,6 +212,27 @@ def merge_all_datasets(actions, sectors, bourses):
 
     return df
 
+def prepare_datasets():
+    indices = load_indices(os.path.join(BASE_PATH, "sector_indices"))
+    bourses = load_indices(os.path.join(BASE_PATH, "bourse_indices"))
+    actions = load_actions(BASE_PATH)
+
+    fill_indice = pd.concat(indices, ignore_index=True)
+    fill_bourse = pd.concat(bourses, ignore_index=True)
+    fill_df = pd.concat(actions, ignore_index=True)
+
+    fill_df = pd.get_dummies(fill_df, columns=["Market", "Sector"])
+
+    ticker_encoder = LabelEncoder()
+    indice_encoder = LabelEncoder()
+    bourse_encoder = LabelEncoder()
+
+    fill_df["Ticker"] = ticker_encoder.fit_transform(fill_df["Ticker"])
+    fill_indice["indice"] = indice_encoder.fit_transform(fill_indice["indice"])
+    fill_bourse["indice"] = bourse_encoder.fit_transform(fill_bourse["indice"])
+
+    return fill_indice, fill_df, fill_bourse, ticker_encoder
+
 def main():  
     
     fill_actions,fill_sectors,fill_bourses = concat_dataframe()
