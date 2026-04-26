@@ -13,7 +13,7 @@ import warnings
 warnings.filterwarnings("ignore")
 
 # ── 1. Chargement ─────────────────────────────────────────────────────────────
-from traitement_de_donnee import fill_df, ticker_encoder
+from traitement_de_donnee2 import fill_df, ticker_encoder
 
 df = fill_df.copy()
 
@@ -56,6 +56,10 @@ df["month"]        = pd.to_datetime(df["Date"]).dt.month
 df["quarter"]      = pd.to_datetime(df["Date"]).dt.quarter
 
 df = df.dropna(subset=["target_close"])
+
+for file in ["scaler.pkl", "important_features.pkl", "model_final.pkl", "best_params.pkl"]:
+    if os.path.exists(file):
+        os.remove(file)
 
 # ── 4. Boîte à moustaches AVANT normalisation ─────────────────────────────────
 if not os.path.exists("boxplots.png"):
