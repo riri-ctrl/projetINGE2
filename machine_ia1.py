@@ -13,7 +13,7 @@ import warnings
 warnings.filterwarnings("ignore")
 
 # ── 1. Chargement ─────────────────────────────────────────────────────────────
-from traitement_de_donnee2 import fill_df, ticker_encoder
+from traitement_de_donnee3 import fill_df, ticker_encoder
 
 df = fill_df.copy()
 
